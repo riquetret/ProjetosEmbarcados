@@ -52,21 +52,22 @@ void app_main(void)
         return;
     }
 
-    ESP_LOGE(TAG,"Nao foi possivel obter valor da flash");
+    ESP_LOGE(TAG,"Testando Msg de Erro");
 
     ESP_LOGI(TAG,"%" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
             (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "interna" : "externa");
     ESP_LOGI(TAG,"Minimo espaco livre no Heap: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
 
     for (int i = 2; i >= 0; i--) {
-        ESP_LOGI(TAG,"Testando vTask em %d seconds...\n",i);
+        ESP_LOGI(TAG,"Testando vTask durante %d seconds...\n",i);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 
     fflush(stdout);
     while (1)
     {
-        ESPLOGW(TAG,"Travou");
+        ESP_LOGW(TAG,"Travou");
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
     
 }
