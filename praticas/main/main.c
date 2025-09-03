@@ -18,7 +18,7 @@ void app_main(void)
 {
     static const char* TAG = "ESP_HENRIQUE";
     ESP_LOGI(TAG,"Ola, mundo!"); // O esp-idf gerou esse comando sozinho
-
+    //esp_log_level_set(TAG,ESP_LOG_WARN);
     /* Print chip information */
     esp_chip_info_t chip_info;  // Criacao do struct para informacoes
     uint32_t flash_size;        // Variavel para tamanho do flash
