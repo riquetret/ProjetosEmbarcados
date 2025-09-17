@@ -17,26 +17,38 @@
 #include "esp_log.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
+#include "driver/gptimer.h"
 
-////////////////////////////////////////////////////
+//////////////////////////////////////////////////// PRATICA 2
 #define GPIO_INPUT_IO_21    21  //Botao 0
 #define GPIO_INPUT_IO_22    22  //Botao 1
 #define GPIO_INPUT_IO_23    23  //Botao 2
 //1ULL é uma palavra de 64bits com o primeiro bit em 1, depois eh feito o deslocamento para configuracao correta
 #define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_21) | (1ULL<<GPIO_INPUT_IO_22) | (1ULL<<GPIO_INPUT_IO_23)) 
-////////////////////////////////////////////////////
+
 #define GPIO_OUTPUT_IO_2    2   //LED DA PLACA
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_2))
-////////////////////////////////////////////////////
+
 #define ESP_INTR_FLAG_DEFAULT 0 //Flag da interrupcao de IO
 static QueueHandle_t gpio_evt_queue = NULL;
 
-// Variáveis para debounce
+// Variáveis para debounce PRATICA 2
 static unsigned int tickAnterior = 0;    //Tick da ultima mudanca do led quando pressiona Botao 2 (GPIO23)
 #define TEMPO_DEBOUNCE 250  //250ms de debounce
 
+//////////////////////////////////////////////////// PRATICA 3
+typedef struct {
+    uint64_t contAtualTimer;
+    uint64_t valorAlarme;
+} filaTimer1;
+
+static QueueHandle_t timer1Queue = NULL;
+static gptimer_handle_t gptimer1 = NULL;
+
+//////////////////////////////////////////////////// TAGS
 static const char* TAG = "PRATICA1";
 static const char* TAG2 = "PRATICA2";
+static const char* TAG3 = "PRATICA3";
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
@@ -62,7 +74,7 @@ void configuraIO_pratica02(){
     gpio_config(&io_conf);
 
     //SAIDA LED, VOU REINICIAR POR SEGURANCA
-    //io_conf = {};
+    memset(&io_conf, 0, sizeof(io_conf)); // Reseta todo o struct para zero
     //disable interrupt
     io_conf.intr_type = GPIO_INTR_DISABLE;
     //set as output mode
@@ -114,16 +126,120 @@ static void pratica02(void* arg)
             else
             {
                 acendeLed = io_num&1;   // Se GPIO21 io_num=21 (Botao 0) temos resultado 1, se GPIO22 (Botao 1) temos resultado 0
-                ESP_LOGI(TAG2,"%s %s",mensagens[acendeLed],mensagen2);
+                ESP_LOGI(TAG2,"%s %s",mensagens[(int) acendeLed],mensagen2);
                 gpio_set_level(GPIO_OUTPUT_IO_2, acendeLed);
             }
         }
     }
 }
 
+static bool IRAM_ATTR Timer1Interrupcao(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
+{
+    QueueHandle_t queue = (QueueHandle_t)user_data;
+    filaTimer1 retornoFila = {
+        .contAtualTimer = edata->count_value,
+        .valorAlarme = edata->alarm_value
+    };
+    xQueueSendFromISR(queue, &retornoFila, NULL);
+    return 1;
+}
+
+void AtualizaHoras(unsigned short int* ptr){
+    *(ptr+2) = *(ptr+2) + 1;    //Soma 1 Segundo
+    if (*(ptr+2)==60)
+    {
+        *(ptr+2) = 0; // Reseta Segundos
+        *(ptr+1) = *(ptr+1) + 1; // Avanca Minutos
+    }
+    else if(*(ptr+1)==60){
+        *(ptr+1) = 0; // Reseta Minutos
+        *(ptr) = *(ptr) + 1; // Avanca Horas
+    }
+    else if(*(ptr)==24){
+        *(ptr) = 0; // Reseta Horas
+    }
+}
+
+static void pratica03(void* arg){
+    static unsigned short int horas[] = {0,0,0};
+    unsigned short int contagem = 0;
+    filaTimer1 filaDados = {0,0};
+    timer1Queue = xQueueCreate(1, sizeof(filaTimer1));
+
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1E6, // 1MHz, 1 tick=1us
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer1));
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = Timer1Interrupcao,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer1, &cbs, timer1Queue));
+
+    ESP_LOGI(TAG3, "Habilita timer");
+    ESP_ERROR_CHECK(gptimer_enable(gptimer1));
+
+    ESP_LOGI(TAG3, "Start timer, stop it at alarm event");
+    gptimer_alarm_config_t alarm_config1 = {
+        .reload_count = 0,
+        .alarm_count = 100E3, // periodo = 100ms
+        .flags.auto_reload_on_alarm = false,
+    };
+
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer1, &alarm_config1));
+    ESP_ERROR_CHECK(gptimer_start(gptimer1));
+
+    while(1) {
+        if (xQueueReceive(timer1Queue, &filaDados, portMAX_DELAY)) {
+            //ESP_LOGI(TAG3, "Recebeu: Tempo Atual = %llu, Alarme = %llu",filaDados.contAtualTimer, filaDados.valorAlarme);
+            alarm_config1.alarm_count=filaDados.valorAlarme+100E3;
+            ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer1, &alarm_config1));
+            contagem++;
+        }
+        if (contagem>=10)
+        {
+            contagem=0;
+            AtualizaHoras(horas);
+            ESP_LOGI(TAG3, "Relogio: %02d:%02d:%02d", horas[0], horas[1], horas[2]);
+        }
+    }
+}
+
+void TamanhoVariaveis(){
+    // A função sizeof() retorna o tamanho em bytes
+    ESP_LOGI(TAG, "Tamanho dos Tipos de Dados em C (em bytes e bits):");
+    
+    // Tipos de dados básicos
+    ESP_LOGI(TAG, "char: %2zu bytes (%3zu bits)", sizeof(char), sizeof(char) * 8);
+    ESP_LOGI(TAG, "signed char: %2zu bytes (%3zu bits)", sizeof(signed char), sizeof(signed char) * 8);
+    ESP_LOGI(TAG, "unsigned char: %2zu bytes (%3zu bits)", sizeof(unsigned char), sizeof(unsigned char) * 8);
+    
+    ESP_LOGI(TAG, "bool: %2zu bytes (%3zu bits)", sizeof(bool), sizeof(bool) * 8);
+
+    // Tipos de dados inteiros
+    ESP_LOGI(TAG, "short int: %2zu bytes (%3zu bits)", sizeof(short int), sizeof(short int) * 8);
+    ESP_LOGI(TAG, "unsigned short int: %2zu bytes (%3zu bits)", sizeof(unsigned short int), sizeof(unsigned short int) * 8);
+    
+    ESP_LOGI(TAG, "int: %2zu bytes (%3zu bits)", sizeof(int), sizeof(int) * 8);
+    ESP_LOGI(TAG, "unsigned int: %2zu bytes (%3zu bits)", sizeof(unsigned int), sizeof(unsigned int) * 8);
+    
+    ESP_LOGI(TAG, "long int: %2zu bytes (%3zu bits)", sizeof(long int), sizeof(long int) * 8);
+    ESP_LOGI(TAG, "unsigned long int: %2zu bytes (%3zu bits)", sizeof(unsigned long int), sizeof(unsigned long int) * 8);
+    
+    ESP_LOGI(TAG, "long long int: %2zu bytes (%3zu bits)", sizeof(long long int), sizeof(long long int) * 8);
+    ESP_LOGI(TAG, "unsigned long long int: %2zu bytes (%3zu bits)", sizeof(unsigned long long int), sizeof(unsigned long long int) * 8);
+    
+    // Tipos de dados de ponto flutuante
+    ESP_LOGI(TAG, "float: %2zu bytes (%3zu bits)", sizeof(float), sizeof(float) * 8);
+    ESP_LOGI(TAG, "double: %2zu bytes (%3zu bits)", sizeof(double), sizeof(double) * 8);
+    ESP_LOGI(TAG, "long double: %2zu bytes (%3zu bits)", sizeof(long double), sizeof(long double) * 8);
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG,"Ola, mundo!"); // O esp-idf gerou esse comando sozinho
+    TamanhoVariaveis();
     //esp_log_level_set(TAG,ESP_LOG_WARN);
     /* Print chip information */
     esp_chip_info_t chip_info;  // Criacao do struct para informacoes
@@ -175,6 +291,7 @@ void app_main(void)
 
     //Inicia task da pratica 2
     xTaskCreate(pratica02, "pratica02", 2048, NULL, 10, NULL);
+    xTaskCreate(pratica03, "pratica03", 2048, NULL, 9, NULL);
 
     while (1)
     {
