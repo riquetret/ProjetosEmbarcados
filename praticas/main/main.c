@@ -151,17 +151,17 @@ void AtualizaHoras(unsigned short int* ptr){
         *(ptr+2) = 0; // Reseta Segundos
         *(ptr+1) = *(ptr+1) + 1; // Avanca Minutos
     }
-    else if(*(ptr+1)==60){
+    if(*(ptr+1)==60){
         *(ptr+1) = 0; // Reseta Minutos
         *(ptr) = *(ptr) + 1; // Avanca Horas
     }
-    else if(*(ptr)==24){
+    if(*(ptr)==24){
         *(ptr) = 0; // Reseta Horas
     }
 }
 
 static void pratica03(void* arg){
-    static unsigned short int horas[] = {0,0,0};
+    static unsigned short int horas[] = {23,59,57};
     unsigned short int contagem = 0;
     filaTimer1 filaDados = {0,0};
     timer1Queue = xQueueCreate(1, sizeof(filaTimer1));
@@ -190,7 +190,8 @@ static void pratica03(void* arg){
     ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer1, &alarm_config1));
     ESP_ERROR_CHECK(gptimer_start(gptimer1));
 
-    while(1) {
+    while(1) 
+    {
         if (xQueueReceive(timer1Queue, &filaDados, portMAX_DELAY)) {
             //ESP_LOGI(TAG3, "Recebeu: Tempo Atual = %llu, Alarme = %llu",filaDados.contAtualTimer, filaDados.valorAlarme);
             alarm_config1.alarm_count=filaDados.valorAlarme+100E3;
