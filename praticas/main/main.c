@@ -46,9 +46,9 @@ static QueueHandle_t timer1Queue = NULL;
 static gptimer_handle_t gptimer1 = NULL;
 
 //////////////////////////////////////////////////// TAGS
-static const char* TAG = "PRATICA1";
-static const char* TAG2 = "PRATICA2";
-static const char* TAG3 = "PRATICA3";
+static const char* TAG = "Pratica-1";
+static const char* TAG2 = "Pratica-2";
+static const char* TAG3 = "Pratica-3";
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
@@ -123,10 +123,10 @@ static void pratica02(void* arg)
                 acendeLed = acendeLed ^ 1;  // Troca Nivel Logico
                 gpio_set_level(GPIO_OUTPUT_IO_2, acendeLed);
             }
-            else
+            else if (io_num>20 && io_num<23)
             {
                 acendeLed = io_num&1;   // Se GPIO21 io_num=21 (Botao 0) temos resultado 1, se GPIO22 (Botao 1) temos resultado 0
-                ESP_LOGI(TAG2,"%s %s",mensagens[(int) acendeLed],mensagen2);
+                ESP_LOGI(TAG2,"%s %s",mensagens[(size_t)acendeLed],mensagen2);
                 gpio_set_level(GPIO_OUTPUT_IO_2, acendeLed);
             }
         }
@@ -167,7 +167,7 @@ static void pratica03(void* arg){
     timer1Queue = xQueueCreate(1, sizeof(filaTimer1));
 
     gptimer_config_t timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT, //80MHz
         .direction = GPTIMER_COUNT_UP,
         .resolution_hz = 1E6, // 1MHz, 1 tick=1us
     };
@@ -180,7 +180,7 @@ static void pratica03(void* arg){
     ESP_LOGI(TAG3, "Habilita timer");
     ESP_ERROR_CHECK(gptimer_enable(gptimer1));
 
-    ESP_LOGI(TAG3, "Start timer, stop it at alarm event");
+    ESP_LOGI(TAG3, "Timer comecou, configure o alarme");
     gptimer_alarm_config_t alarm_config1 = {
         .reload_count = 0,
         .alarm_count = 100E3, // periodo = 100ms
@@ -296,7 +296,7 @@ void app_main(void)
 
     while (1)
     {
-        ESP_LOGI(TAG,"Task 1 a cada 2 segundos");
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
+        ESP_LOGI(TAG,"Task 1 a cada 15 segundos");
+        vTaskDelay(15E3 / portTICK_PERIOD_MS);
     }
 }
