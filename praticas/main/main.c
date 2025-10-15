@@ -224,7 +224,7 @@ static void pratica03(void* arg){
         {
             contagem=0;
             AtualizaHoras(horas);
-            ESP_LOGI(TAG3, "Relogio: %02d:%02d:%02d", horas[0], horas[1], horas[2]);
+            ESP_LOGI(TAG3, "Relogio: %02d:%02d:%02d, Cont = %llu, Alarme = %llu",horas[0], horas[1], horas[2],filaDados.contAtualTimer, filaDados.valorAlarme);
         }
     }
 }
@@ -272,7 +272,6 @@ static void pratica04(void* arg){
         ESP_LOGE(TAG4, "Falha ao criar a queue para o botão!");
     }
 
-    
     for (;;) {
         if (xQueueReceive(botao_pratica2_pratica4_queue, &io_num_recebido, 10 / portTICK_PERIOD_MS)) {
             ESP_LOGI(TAG4, "Botão acionado recebido: GPIO%lu", io_num_recebido);
@@ -281,16 +280,22 @@ static void pratica04(void* arg){
                 automatico=1;
             } else if (io_num_recebido == GPIO_INPUT_IO_22) {
                 automatico=0;
-                dutyPWM = dutyPWM - 512;
+                dutyPWM = dutyPWM - 1023;
                 if(dutyPWM>8191) dutyPWM = 8191;
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, dutyPWM);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
             } else if (io_num_recebido == GPIO_INPUT_IO_21) {
                 automatico=0;
-                dutyPWM = dutyPWM + 512;
+                dutyPWM = dutyPWM + 1024;
                 if(dutyPWM>8191) dutyPWM = 0;
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, dutyPWM);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
             }
             ESP_LOGI(TAG4,"PWM Duty= %" PRIu32 "",dutyPWM);
         }
@@ -302,6 +307,7 @@ static void pratica04(void* arg){
                 if(dutyPWM>8191) dutyPWM = 0;
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, dutyPWM);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
             };
