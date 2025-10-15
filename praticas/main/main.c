@@ -11,6 +11,7 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_system.h"
@@ -18,6 +19,8 @@
 #include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "driver/gptimer.h"
+#include "driver/ledc.h"
+
 
 //////////////////////////////////////////////////// PRATICA 2
 #define GPIO_INPUT_IO_21    21  //Botao 0
@@ -45,10 +48,16 @@ typedef struct {
 static QueueHandle_t timer1Queue = NULL;
 static gptimer_handle_t gptimer1 = NULL;
 
+//////////////////////////////////////////////////// PRATICA 4
+static SemaphoreHandle_t semaphore_pwm = NULL;
+// Dentro da seção PRATICA 4 (ou global)
+static QueueHandle_t botao_pratica2_pratica4_queue = NULL; 
+
 //////////////////////////////////////////////////// TAGS
 static const char* TAG = "Pratica-1";
 static const char* TAG2 = "Pratica-2";
 static const char* TAG3 = "Pratica-3";
+static const char* TAG4 = "Pratica-3";
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
@@ -110,15 +119,17 @@ static void pratica02(void* arg)
     for (;;) {          
         if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {    //Coloca task bloqueada enquanto nao chegar evento GPIO
             tickAtual = xTaskGetTickCount();    //Captura tempo atual
+
+            // Se a diferença de tempo for menor que o tempo de debounce, ignora o evento
+            if (tickAtual - tickAnterior < debounce_ticks) {
+                continue;
+            }
+
+            tickAnterior = tickAtual;
+
             if (io_num==23)
             {
-                // Se a diferença de tempo for menor que o tempo de debounce, ignora o evento
-                if (tickAtual - tickAnterior < debounce_ticks) {
-                    continue;
-                }
-                
                 // Atualiza o tempo do último clique
-                tickAnterior = tickAtual;
                 ESP_LOGI(TAG2,"%s %s",mensagens[2],mensagen2);
                 acendeLed = acendeLed ^ 1;  // Troca Nivel Logico
                 gpio_set_level(GPIO_OUTPUT_IO_2, acendeLed);
@@ -129,6 +140,16 @@ static void pratica02(void* arg)
                 ESP_LOGI(TAG2,"%s %s",mensagens[(size_t)acendeLed],mensagen2);
                 gpio_set_level(GPIO_OUTPUT_IO_2, acendeLed);
             }
+
+            // NOVO: Envia o número do pino para a task pratica04
+            if (botao_pratica2_pratica4_queue != NULL) {
+                // Envia o número do pino (io_num) para a Queue da pratica04
+                // Sem timeout (0) pois já estamos dentro de um loop de evento
+                if (xQueueSend(botao_pratica2_pratica4_queue, &io_num, 0) != pdPASS) {
+                    ESP_LOGW(TAG2, "Falha ao enviar o botão %lu para a Pratica 4", io_num);
+                }
+            }
+            
         }
     }
 }
@@ -141,6 +162,7 @@ static bool IRAM_ATTR Timer1Interrupcao(gptimer_handle_t timer, const gptimer_al
         .valorAlarme = edata->alarm_value
     };
     xQueueSendFromISR(queue, &retornoFila, NULL);
+    xSemaphoreGiveFromISR(semaphore_pwm,NULL); //Função na TASK Timer para sincronizar com a task PWM
     return 1;
 }
 
@@ -204,6 +226,87 @@ static void pratica03(void* arg){
             AtualizaHoras(horas);
             ESP_LOGI(TAG3, "Relogio: %02d:%02d:%02d", horas[0], horas[1], horas[2]);
         }
+    }
+}
+
+void configuraPWM_pratica04(){
+    // Prepare and then apply the LEDC PWM timer configuration
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_LOW_SPEED_MODE,
+        .duty_resolution  = 13,
+        .timer_num        = LEDC_TIMER_0,
+        .freq_hz          = 5E3,  // Set output frequency at 4 kHz
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // Prepare and then apply the LEDC PWM channel configuration
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode     = LEDC_LOW_SPEED_MODE,
+        .channel        = LEDC_CHANNEL_0,
+        .timer_sel      = LEDC_TIMER_0,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = 16,
+        .duty           = 0, // Set duty to 0%
+        .hpoint         = 0
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+    /////////////////////////////////////////////////////////////////////////////////////////
+    // Prepare and then apply the LEDC PWM timer configuration
+
+    // Prepare and then apply the LEDC PWM channel configuration
+    ledc_channel.channel = LEDC_CHANNEL_1;
+    ledc_channel.gpio_num = 33;
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+}
+
+static void pratica04(void* arg){
+    uint32_t io_num_recebido;
+    uint32_t dutyPWM = 4096;
+    char automatico = 0;
+    configuraPWM_pratica04();
+    semaphore_pwm = xSemaphoreCreateBinary();
+
+    botao_pratica2_pratica4_queue = xQueueCreate(1, sizeof(uint32_t)); 
+    if (botao_pratica2_pratica4_queue == NULL) {
+        ESP_LOGE(TAG4, "Falha ao criar a queue para o botão!");
+    }
+
+    
+    for (;;) {
+        if (xQueueReceive(botao_pratica2_pratica4_queue, &io_num_recebido, 10 / portTICK_PERIOD_MS)) {
+            ESP_LOGI(TAG4, "Botão acionado recebido: GPIO%lu", io_num_recebido);
+            // Sua lógica para checar o botão na pratica04 vai aqui:
+            if (io_num_recebido == GPIO_INPUT_IO_23) {
+                automatico=1;
+            } else if (io_num_recebido == GPIO_INPUT_IO_22) {
+                automatico=0;
+                dutyPWM = dutyPWM - 512;
+                if(dutyPWM>8191) dutyPWM = 8191;
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            } else if (io_num_recebido == GPIO_INPUT_IO_21) {
+                automatico=0;
+                dutyPWM = dutyPWM + 512;
+                if(dutyPWM>8191) dutyPWM = 0;
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            }
+            ESP_LOGI(TAG4,"PWM Duty= %" PRIu32 "",dutyPWM);
+        }
+        if (automatico)
+        {
+            if(xSemaphoreTake(semaphore_pwm, portMAX_DELAY))
+            {
+                dutyPWM = dutyPWM + 128;
+                if(dutyPWM>8191) dutyPWM = 0;
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, dutyPWM);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+            };
+        }
+
     }
 }
 
@@ -293,6 +396,7 @@ void app_main(void)
     //Inicia task da pratica 2
     xTaskCreate(pratica02, "pratica02", 2048, NULL, 10, NULL);
     xTaskCreate(pratica03, "pratica03", 2048, NULL, 9, NULL);
+    xTaskCreate(pratica04, "pratica04", 2048, NULL, 8, NULL);
 
     while (1)
     {
