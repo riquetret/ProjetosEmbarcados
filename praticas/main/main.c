@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <inttypes.h>
 #include <string.h>
 #include "sdkconfig.h"
@@ -15,7 +16,11 @@
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_system.h"
+#include "soc/soc_caps.h"
 #include "esp_log.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "driver/gptimer.h"
@@ -52,12 +57,19 @@ static gptimer_handle_t gptimer1 = NULL;
 static SemaphoreHandle_t semaphore_pwm = NULL;
 // Dentro da seção PRATICA 4 (ou global)
 static QueueHandle_t botao_pratica2_pratica4_queue = NULL; 
-
+//////////////////////////////////////////////////// PRATICA 5
+static SemaphoreHandle_t semaphore_adc = NULL;
+static QueueHandle_t lidoADC_to_timer = NULL;
+typedef struct {
+    int bruto;
+    int tensao;
+} filaADC;
 //////////////////////////////////////////////////// TAGS
 static const char* TAG = "Pratica-1";
 static const char* TAG2 = "Pratica-2";
 static const char* TAG3 = "Pratica-3";
-static const char* TAG4 = "Pratica-3";
+static const char* TAG4 = "Pratica-4";
+static const char* TAG5 = "Pratica-5";
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
@@ -163,6 +175,7 @@ static bool IRAM_ATTR Timer1Interrupcao(gptimer_handle_t timer, const gptimer_al
     };
     xQueueSendFromISR(queue, &retornoFila, NULL);
     xSemaphoreGiveFromISR(semaphore_pwm,NULL); //Função na TASK Timer para sincronizar com a task PWM
+    xSemaphoreGiveFromISR(semaphore_adc,NULL); //Função na TASK Timer para sincronizar com a task ADC
     return 1;
 }
 
@@ -183,9 +196,10 @@ void AtualizaHoras(unsigned short int* ptr){
 }
 
 static void pratica03(void* arg){
-    static unsigned short int horas[] = {23,59,57};
+    unsigned short int horas[] = {23,59,57};
     unsigned short int contagem = 0;
     filaTimer1 filaDados = {0,0};
+    filaADC dadosADC;
     timer1Queue = xQueueCreate(1, sizeof(filaTimer1));
 
     gptimer_config_t timer_config = {
@@ -225,6 +239,9 @@ static void pratica03(void* arg){
             contagem=0;
             AtualizaHoras(horas);
             ESP_LOGI(TAG3, "Relogio: %02d:%02d:%02d, Cont = %llu, Alarme = %llu",horas[0], horas[1], horas[2],filaDados.contAtualTimer, filaDados.valorAlarme);
+            if (xQueueReceive(lidoADC_to_timer, &dadosADC, 0)){
+                ESP_LOGI(TAG5, "ADC, RAW: %d, Tensao: %d",dadosADC.bruto,dadosADC.tensao);
+            }
         }
     }
 }
@@ -316,6 +333,91 @@ static void pratica04(void* arg){
     }
 }
 
+static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
+{
+    adc_cali_handle_t handle = NULL;
+    esp_err_t ret = ESP_FAIL;
+    bool calibrated = false;
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
+        adc_cali_curve_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .chan = channel,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
+        adc_cali_line_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+    *out_handle = handle;
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Calibration Success");
+    } else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated) {
+        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
+    } else {
+        ESP_LOGE(TAG, "Invalid arg or no memory");
+    }
+
+    return calibrated;
+}
+
+static void pratica05(void* arg){
+    filaADC filaDados = {0,0};
+    lidoADC_to_timer = xQueueCreate(1, sizeof(filaADC)); 
+    if (lidoADC_to_timer == NULL) {
+        ESP_LOGE(TAG5, "Falha ao criar a queue para o ADC!");
+    }
+    semaphore_adc = xSemaphoreCreateBinary();
+    //-------------ADC1 Init---------------//
+    adc_oneshot_unit_handle_t adc1_handle;
+    adc_oneshot_unit_init_cfg_t init_config1 = {
+        .unit_id = ADC_UNIT_1,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+
+    //-------------ADC1 Config---------------//
+    adc_oneshot_chan_cfg_t config = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_3, &config));
+
+    //-------------ADC1 Calibration Init---------------//
+    adc_cali_handle_t adc1_cali_chan0_handle = NULL;
+    bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_3, ADC_ATTEN_DB_12, &adc1_cali_chan0_handle);
+
+    while (1) {
+        if(xSemaphoreTake(semaphore_adc, portMAX_DELAY)){
+            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_3, &filaDados.bruto));
+            if(do_calibration1_chan0)ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, filaDados.bruto, &filaDados.tensao));
+            if (xQueueOverwrite(lidoADC_to_timer, &filaDados) != pdPASS) {
+                ESP_LOGE(TAG5, "Falha crítica ao sobrescrever o ADC na fila");
+            }
+        }
+    }
+}
+
 void TamanhoVariaveis(){
     // A função sizeof() retorna o tamanho em bytes
     ESP_LOGI(TAG, "Tamanho dos Tipos de Dados em C (em bytes e bits):");
@@ -403,6 +505,7 @@ void app_main(void)
     xTaskCreate(pratica02, "pratica02", 2048, NULL, 10, NULL);
     xTaskCreate(pratica03, "pratica03", 2048, NULL, 9, NULL);
     xTaskCreate(pratica04, "pratica04", 2048, NULL, 8, NULL);
+    xTaskCreate(pratica05, "pratica05", 2048, NULL, 7, NULL);
 
     while (1)
     {
