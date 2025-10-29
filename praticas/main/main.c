@@ -196,7 +196,7 @@ void AtualizaHoras(unsigned short int* ptr){
 }
 
 static void pratica03(void* arg){
-    unsigned short int horas[] = {23,59,57};
+    unsigned short int horas[] = {0,0,0};
     unsigned short int contagem = 0;
     filaTimer1 filaDados = {0,0};
     filaADC dadosADC;
@@ -281,6 +281,8 @@ static void pratica04(void* arg){
     uint32_t io_num_recebido;
     uint32_t dutyPWM = 4096;
     char automatico = 0;
+    char mudouDutyPWM = 1;
+    
     configuraPWM_pratica04();
     semaphore_pwm = xSemaphoreCreateBinary();
 
@@ -299,22 +301,13 @@ static void pratica04(void* arg){
                 automatico=0;
                 dutyPWM = dutyPWM - 1023;
                 if(dutyPWM>8191) dutyPWM = 8191;
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
-                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, dutyPWM);
-                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
             } else if (io_num_recebido == GPIO_INPUT_IO_21) {
                 automatico=0;
                 dutyPWM = dutyPWM + 1024;
                 if(dutyPWM>8191) dutyPWM = 0;
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
-                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, dutyPWM);
-                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
             }
             ESP_LOGI(TAG4,"PWM Duty= %" PRIu32 "",dutyPWM);
+            mudouDutyPWM = 1;
         }
         if (automatico)
         {
@@ -322,14 +315,17 @@ static void pratica04(void* arg){
             {
                 dutyPWM = dutyPWM + 128;
                 if(dutyPWM>8191) dutyPWM = 0;
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
-                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, dutyPWM);
-                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
             };
+            mudouDutyPWM = 1;
         }
-
+        if(mudouDutyPWM)
+        {
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, dutyPWM);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, dutyPWM);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+            mudouDutyPWM=0;
+        }
     }
 }
 
