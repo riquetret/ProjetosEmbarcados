@@ -26,6 +26,13 @@
 #include "driver/gptimer.h"
 #include "driver/ledc.h"
 
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "driver/i2c_master.h"
+#include "esp_lvgl_port.h"
+#include "lvgl.h"
+#include "esp_lcd_panel_vendor.h"
+
 
 //////////////////////////////////////////////////// PRATICA 2
 #define GPIO_INPUT_IO_21    21  //Botao 0
@@ -64,12 +71,37 @@ typedef struct {
     int bruto;
     int tensao;
 } filaADC;
+//////////////////////////////////////////////////// PRATICA 6
+static QueueHandle_t horaAtual = NULL; 
+typedef struct {
+    esp_lcd_panel_io_handle_t handleDeIo;
+    esp_lcd_panel_handle_t handleDePainel;
+} configuracaoDisplay;
+#define I2C_BUS_PORT  0
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////// Please update the following configuration according to your LCD spec //////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#define EXAMPLE_LCD_PIXEL_CLOCK_HZ    (400 * 1000)
+#define EXAMPLE_PIN_NUM_SDA           19
+#define EXAMPLE_PIN_NUM_SCL           18
+#define EXAMPLE_PIN_NUM_RST           -1
+#define EXAMPLE_I2C_HW_ADDR           0x3C
+
+// The pixel number in horizontal and vertical
+#define EXAMPLE_LCD_H_RES              128
+#define EXAMPLE_LCD_V_RES              64
+// Bit number used to represent command and parameter
+#define EXAMPLE_LCD_CMD_BITS           8
+#define EXAMPLE_LCD_PARAM_BITS         8
+
 //////////////////////////////////////////////////// TAGS
 static const char* TAG = "Pratica-1";
 static const char* TAG2 = "Pratica-2";
 static const char* TAG3 = "Pratica-3";
 static const char* TAG4 = "Pratica-4";
 static const char* TAG5 = "Pratica-5";
+static const char* TAG6 = "Pratica-6";
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
@@ -201,6 +233,7 @@ static void pratica03(void* arg){
     filaTimer1 filaDados = {0,0};
     filaADC dadosADC;
     timer1Queue = xQueueCreate(1, sizeof(filaTimer1));
+    horaAtual = xQueueCreate(1, sizeof(horas));
 
     gptimer_config_t timer_config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT, //80MHz
@@ -239,8 +272,11 @@ static void pratica03(void* arg){
             contagem=0;
             AtualizaHoras(horas);
             ESP_LOGI(TAG3, "Relogio: %02d:%02d:%02d, Cont = %llu, Alarme = %llu",horas[0], horas[1], horas[2],filaDados.contAtualTimer, filaDados.valorAlarme);
-            if (xQueueReceive(lidoADC_to_timer, &dadosADC, 0)){
+            if (xQueuePeek(lidoADC_to_timer, &dadosADC, 0)){
                 ESP_LOGI(TAG5, "ADC, RAW: %d, Tensao: %d",dadosADC.bruto,dadosADC.tensao);
+            }
+            if (xQueueOverwrite(horaAtual, horas) != pdPASS) { 
+                 ESP_LOGW(TAG3, "Falha ao sobrescrever horas");
             }
         }
     }
@@ -299,7 +335,7 @@ static void pratica04(void* arg){
                 automatico=1;
             } else if (io_num_recebido == GPIO_INPUT_IO_22) {
                 automatico=0;
-                dutyPWM = dutyPWM - 1023;
+                dutyPWM = dutyPWM - 1024;
                 if(dutyPWM>8191) dutyPWM = 8191;
             } else if (io_num_recebido == GPIO_INPUT_IO_21) {
                 automatico=0;
@@ -414,6 +450,118 @@ static void pratica05(void* arg){
     }
 }
 
+configuracaoDisplay pratica06Configura(){
+    ESP_LOGI(TAG6, "Inicializa I2C bus");
+    i2c_master_bus_handle_t i2c_bus = NULL;
+    i2c_master_bus_config_t bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .i2c_port = I2C_BUS_PORT,
+        .sda_io_num = EXAMPLE_PIN_NUM_SDA,
+        .scl_io_num = EXAMPLE_PIN_NUM_SCL,
+        .flags.enable_internal_pullup = true,
+    };
+    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &i2c_bus));
+
+    ESP_LOGI(TAG6, "Instalacao Io de painel"); // Enderecos i2c, clock, n bits para comandar
+    esp_lcd_panel_io_handle_t io_handle = NULL;
+    esp_lcd_panel_io_i2c_config_t io_config = {
+        .dev_addr = EXAMPLE_I2C_HW_ADDR,
+        .scl_speed_hz = EXAMPLE_LCD_PIXEL_CLOCK_HZ,
+        .control_phase_bytes = 1,               // According to SSD1306 datasheet
+        .lcd_cmd_bits = EXAMPLE_LCD_CMD_BITS,   // According to SSD1306 datasheet
+        .lcd_param_bits = EXAMPLE_LCD_CMD_BITS, // According to SSD1306 datasheet
+        .dc_bit_offset = 6,                     // According to SSD1306 datasheet
+        };
+        ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_bus, &io_config, &io_handle));
+
+        ESP_LOGI(TAG6, "Instalacao SSD1306 painel driver"); // Gerenciamento de funcoes
+        esp_lcd_panel_handle_t panel_handle = NULL;
+        esp_lcd_panel_dev_config_t panel_config = {
+            .bits_per_pixel = 1,
+            .reset_gpio_num = EXAMPLE_PIN_NUM_RST,
+        };
+        esp_lcd_panel_ssd1306_config_t ssd1306_config = {
+            .height = EXAMPLE_LCD_V_RES,
+        };
+        panel_config.vendor_config = &ssd1306_config;
+        ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1306(io_handle, &panel_config, &panel_handle));
+
+        ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
+        ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
+        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+
+    configuracaoDisplay objeto1;
+    objeto1.handleDeIo = io_handle;
+    objeto1.handleDePainel = panel_handle;
+    return objeto1;
+}
+
+static void pratica06(void* arg){
+    configuracaoDisplay objeto2= pratica06Configura();
+    filaADC dadosADC;
+    unsigned short int horas[] = {0,0,0};
+    char mensagem[39];
+    
+    // CORREÇÃO LVGL: Criação única de objetos
+    lv_obj_t *scr=NULL;
+    lv_obj_t *label=NULL;
+
+    ESP_LOGI(TAG6, "Inicializa LVGL");
+    const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    lvgl_port_init(&lvgl_cfg);
+
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle = objeto2.handleDeIo,
+        .panel_handle = objeto2.handleDePainel,
+        // CORREÇÃO: Buffer Size (128*64 / 8 = 1024 bytes para 1bpp)
+        .buffer_size = EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES, 
+        .double_buffer = true,
+        .hres = EXAMPLE_LCD_H_RES,
+        .vres = EXAMPLE_LCD_V_RES,
+        .monochrome = true,
+        .rotation = {
+            .swap_xy = false,
+            .mirror_x = false,
+            .mirror_y = false,
+        }
+    };
+    lv_disp_t *disp = lvgl_port_add_disp(&disp_cfg);
+    lv_disp_set_rotation(disp, LV_DISP_ROT_180);
+
+    // CRIAÇÃO DO LABEL (APENAS UMA VEZ)
+    if (lvgl_port_lock(0)) {
+        scr = lv_disp_get_scr_act(disp);
+        label = lv_label_create(scr);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(label, disp->driver->hor_res);
+        lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+        lv_label_set_text(label, "INICIANDO..."); // Texto inicial
+        lvgl_port_unlock();
+    }
+    
+    while(1)
+    {
+        // 1. Tenta PEGAR os dados mais recentes (não bloqueante)
+        xQueuePeek(lidoADC_to_timer, &dadosADC, 0);
+        xQueuePeek(horaAtual, &horas, 0); // Use PEEK, a Task 3 já enviou os dados com Overwrite
+
+        // 2. Formata a nova mensagem
+        // Usando snprintf para evitar estouro de buffer
+        snprintf(mensagem, sizeof(mensagem), "Tensao: %dmV\nRelogio: %02d:%02d:%02d",
+                 dadosADC.tensao, horas[0], horas[1], horas[2]);
+
+        // 3. Atualiza o LVGL (apenas o texto)
+        if (lvgl_port_lock(0)) {
+            lv_label_set_text(label, mensagem); // Apenas atualiza o texto do label existente
+            lvgl_port_unlock();
+        }
+        
+        // 4. A Task 6 deve ter um delay para não monopolizar a CPU
+        vTaskDelay(pdMS_TO_TICKS(500)); // Atualiza a cada 500ms (ou 100ms se preferir)
+    }
+}
+
 void TamanhoVariaveis(){
     // A função sizeof() retorna o tamanho em bytes
     ESP_LOGI(TAG, "Tamanho dos Tipos de Dados em C (em bytes e bits):");
@@ -502,6 +650,7 @@ void app_main(void)
     xTaskCreate(pratica03, "pratica03", 2048, NULL, 9, NULL);
     xTaskCreate(pratica04, "pratica04", 2048, NULL, 8, NULL);
     xTaskCreate(pratica05, "pratica05", 2048, NULL, 7, NULL);
+    xTaskCreate(pratica06, "pratica06", 4096, NULL, 6, NULL);
 
     while (1)
     {
