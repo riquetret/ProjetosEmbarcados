@@ -78,6 +78,7 @@ typedef struct {
     esp_lcd_panel_handle_t handleDePainel;
 } configuracaoDisplay;
 #define I2C_BUS_PORT  0
+static SemaphoreHandle_t semaphore_display = NULL;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////// Please update the following configuration according to your LCD spec //////////////////////////////
@@ -278,6 +279,7 @@ static void pratica03(void* arg){
             if (xQueueOverwrite(horaAtual, horas) != pdPASS) { 
                  ESP_LOGW(TAG3, "Falha ao sobrescrever horas");
             }
+            xSemaphoreGive(semaphore_display); //Manda Display Atualizar
         }
     }
 }
@@ -502,6 +504,7 @@ static void pratica06(void* arg){
     filaADC dadosADC;
     unsigned short int horas[] = {0,0,0};
     char mensagem[39];
+    semaphore_display = xSemaphoreCreateBinary();
     
     // CORREÇÃO LVGL: Criação única de objetos
     lv_obj_t *scr=NULL;
@@ -542,23 +545,22 @@ static void pratica06(void* arg){
     
     while(1)
     {
-        // 1. Tenta PEGAR os dados mais recentes (não bloqueante)
-        xQueuePeek(lidoADC_to_timer, &dadosADC, 0);
-        xQueuePeek(horaAtual, &horas, 0); // Use PEEK, a Task 3 já enviou os dados com Overwrite
+        if(xSemaphoreTake(semaphore_display, portMAX_DELAY)){
+            // 1. Tenta PEGAR os dados mais recentes (não bloqueante)
+            xQueuePeek(lidoADC_to_timer, &dadosADC, 0);
+            xQueuePeek(horaAtual, &horas, 0); // Use PEEK, a Task 3 já enviou os dados com Overwrite
 
-        // 2. Formata a nova mensagem
-        // Usando snprintf para evitar estouro de buffer
-        snprintf(mensagem, sizeof(mensagem), "Tensao: %dmV\nRelogio: %02d:%02d:%02d",
-                 dadosADC.tensao, horas[0], horas[1], horas[2]);
+            // 2. Formata a nova mensagem
+            // Usando snprintf para evitar estouro de buffer
+            snprintf(mensagem, sizeof(mensagem), "Tensao: %dmV\nRelogio: %02d:%02d:%02d",
+                    dadosADC.tensao, horas[0], horas[1], horas[2]);
 
-        // 3. Atualiza o LVGL (apenas o texto)
-        if (lvgl_port_lock(0)) {
-            lv_label_set_text(label, mensagem); // Apenas atualiza o texto do label existente
-            lvgl_port_unlock();
+            // 3. Atualiza o LVGL (apenas o texto)
+            if (lvgl_port_lock(0)) {
+                lv_label_set_text(label, mensagem); // Apenas atualiza o texto do label existente
+                lvgl_port_unlock();
+            }
         }
-        
-        // 4. A Task 6 deve ter um delay para não monopolizar a CPU
-        vTaskDelay(pdMS_TO_TICKS(500)); // Atualiza a cada 500ms (ou 100ms se preferir)
     }
 }
 
