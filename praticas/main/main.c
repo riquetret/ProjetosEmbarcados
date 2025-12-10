@@ -592,7 +592,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             // ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
 
             msg_id = esp_mqtt_client_subscribe(client, "teste", 0);
-            ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+            ESP_LOGI(TAG7, "sent subscribe successful, msg_id=%d", msg_id);
 
             // msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
             // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
@@ -601,33 +601,32 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             // ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
             // break;
         case MQTT_EVENT_DISCONNECTED:
-            ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+            ESP_LOGI(TAG7, "MQTT_EVENT_DISCONNECTED");
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
-            ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-            msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
-            ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
+            ESP_LOGI(TAG7, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+            msg_id = esp_mqtt_client_publish(client, "teste", "11", 0, 0, 0);
+            ESP_LOGI(TAG7, "sent publish successful, msg_id=%d", msg_id);
             break;
         case MQTT_EVENT_UNSUBSCRIBED:
-            ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+            ESP_LOGI(TAG7, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
             break;
         case MQTT_EVENT_PUBLISHED:
-            ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+            ESP_LOGI(TAG7, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
             break;
         case MQTT_EVENT_DATA:
             {
-                ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+                int percentualDuty;
+                ESP_LOGI(TAG7, "MQTT_EVENT_DATA");
                 printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
                 printf("DATA=%.*s\r\n", event->data_len, event->data);
 
-                // 1. Defina um buffer de tamanho suficiente
-                // Adicionamos +1 para o terminador nulo '\0'
                 size_t data_len = event->data_len;
                 char *data_str = (char *)malloc(data_len + 1);
 
                 if (data_str == NULL) {
-                    ESP_LOGE(TAG, "Falha na alocação de memória.");
+                    ESP_LOGE(TAG7, "Falha na alocação de memória.");
                     break;
                 }
 
@@ -636,38 +635,30 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 // Usamos memcpy e adicionamos o terminador manualmente.
                 memcpy(data_str, event->data, data_len);
                 data_str[data_len] = '\0'; // Garante o terminador nulo
+                percentualDuty = atoi(data_str);
+                percentualDuty = percentualDuty/100.0*8192;
+                if(percentualDuty == 8192) percentualDuty--;
 
-                // 3. Converta a string para um número inteiro longo (long int)
-                char *endptr;
-                long valor_inteiro_long = strtol(data_str, &endptr, 10); // Base 10 (decimal)
-                int valor_inteiro = (int)valor_inteiro_long; // Converte para int (se cabível)
-
-                // 4. Verifique a conversão e imprima o resultado
-                if (endptr == data_str || *endptr != '\0') {
-                    ESP_LOGE(TAG, "Conversão falhou: '%s' não é um número inteiro válido.", data_str);
-                } else {
-                    ESP_LOGI(TAG, "Valor Inteiro Recebido: %d", valor_inteiro);
-
-                    // AQUI você pode usar 'valor_inteiro' para sua lógica, por exemplo:
-                    // if (valor_inteiro > 100) { ... }
-                }
-
-                // 5. Libere a memória alocada
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, percentualDuty );
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, percentualDuty);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+                
                 free(data_str);
 
                 break;
             } // Fim do bloco case
         case MQTT_EVENT_ERROR:
-            ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+            ESP_LOGI(TAG7, "MQTT_EVENT_ERROR");
             if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
                 log_error_if_nonzero("reported from esp-tls", event->error_handle->esp_tls_last_esp_err);
                 log_error_if_nonzero("reported from tls stack", event->error_handle->esp_tls_stack_err);
                 log_error_if_nonzero("captured as transport's socket errno",  event->error_handle->esp_transport_sock_errno);
-                ESP_LOGI(TAG, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
+                ESP_LOGI(TAG7, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
             }
             break;
         default:
-            ESP_LOGI(TAG, "Other event id:%d", event->event_id);
+            ESP_LOGI(TAG7, "Other event id:%d", event->event_id);
             break;
         }
 }
@@ -678,35 +669,12 @@ static void mqtt_app_start(void)
         .broker.address.uri = "mqtt://g3device:g3device@node02.myqtthub.com:1883",
         .credentials.client_id =  "g3device",
     };
-#if CONFIG_BROKER_URL_FROM_STDIN
-    char line[128];
-
-    if (strcmp(mqtt_cfg.broker.address.uri, "FROM_STDIN") == 0) {
-        int count = 0;
-        printf("Please enter url of mqtt broker\n");
-        while (count < 128) {
-            int c = fgetc(stdin);
-            if (c == '\n') {
-                line[count] = '\0';
-                break;
-            } else if (c > 0 && c < 127) {
-                line[count] = c;
-                ++count;
-            }
-            vTaskDelay(10 / portTICK_PERIOD_MS);
-        }
-        mqtt_cfg.broker.address.uri = line;
-        printf("Broker url: %s\n", line);
-    } else {
-        ESP_LOGE(TAG, "Configuration mismatch: wrong broker url");
-        abort();
-    }
-#endif /* CONFIG_BROKER_URL_FROM_STDIN */
 
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
     esp_mqtt_client_start(client);
+    ESP_LOGI(TAG7,"INICIANDO MQTT");
 }
 
 static void pratica07(void* arg){
@@ -828,6 +796,7 @@ void app_main(void)
     xTaskCreate(pratica05, "pratica05", 2048, NULL, 7, NULL);
     xTaskCreate(pratica06, "pratica06", 4096, NULL, 6, NULL);
     xTaskCreate(pratica07, "pratica07", 4096, NULL, 5, NULL);
+
 
     while (1)
     {
