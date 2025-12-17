@@ -571,7 +571,6 @@ static void pratica06(void* arg){
     }
 }
 
-
 static void log_error_if_nonzero(const char *message, int error_code)
 {
     if (error_code != 0) {
@@ -786,6 +785,11 @@ void app_main(void)
     }
 
     fflush(stdout);
+
+    uint32_t resolution = ledc_find_suitable_duty_resolution(80E6, 50E3);
+
+    ESP_LOGI(TAG, "PWM Resolucao Maxima= %" PRIu32 " bits", resolution);
+
     
     ////////////////////////////////////////////////////
 
