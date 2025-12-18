@@ -217,12 +217,12 @@ void buck(void *pvParameters) {
             }
 
             // 1. Leitura rápida do ADC
-            ESP_ERROR_CHECK(adc_oneshot_read(params->adcHandle, ADC_CHANNEL_3, &filaDadosADC.bruto));
+            //ESP_ERROR_CHECK(adc_oneshot_read(params->adcHandle, ADC_CHANNEL_3, &filaDadosADC.bruto));
             
             float x_n = 0.0f;
             if (params->doCalibration) {
                 ESP_ERROR_CHECK(adc_cali_raw_to_voltage(params->adcCaliHandle, filaDadosADC.bruto, &filaDadosADC.tensao));
-                x_n = (float)filaDadosADC.tensao / 1000.0f;
+                x_n = 12-(float)filaDadosADC.tensao / 1000.0f;
             }
 
             // 2. Equação de Diferenças
