@@ -65,7 +65,7 @@ void configuraPWM_pratica(){
         .channel        = LEDC_CHANNEL_0,
         .timer_sel      = LEDC_TIMER_0,
         .intr_type      = LEDC_INTR_DISABLE,
-        .gpio_num       = 16,
+        .gpio_num       = 32,
         .duty           = 0, // Set duty to 0%
         .hpoint         = 0
     };
