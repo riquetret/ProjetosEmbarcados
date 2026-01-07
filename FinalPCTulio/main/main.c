@@ -14,15 +14,38 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 
+//Bibliotecas MQTT
+#include "mqtt_client.h"
+#include "nvs_flash.h"
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "protocol_examples_common.h"
+
 #include "esp_task_wdt.h" // Adicione este include
 
 static const char* TAG = "SISTEMA_BUCK";
+static const char* TAG7 = "MQTT";
+
 
 // Variáveis Globais de Hardware
 SemaphoreHandle_t semaphore_adc;
 adc_oneshot_unit_handle_t adc1_handle;
 adc_cali_handle_t adc1_cali_handle = NULL;
 bool do_calibration;
+static esp_mqtt_client_handle_t client; // Variável global para o arquivo
+
+typedef struct {
+    float tensaoAtual;
+    float dutyAtual;
+} filaEnviaP7;
+
+typedef struct {
+    float setPointDesejado;
+    char requisaTensaoBool;
+} filaRecebeP7;
+
+static QueueHandle_t filaFromP7Queue = NULL;
+static QueueHandle_t filaToP7Queue = NULL;
 
 // --- FUNÇÕES DE CONFIGURAÇÃO ---
 
@@ -146,6 +169,152 @@ void desativar_watchdog_total() {
     }
 }
 
+static void log_error_if_nonzero(const char *message, int error_code)
+{
+    if (error_code != 0) {
+        ESP_LOGE(TAG7, "Last error %s: 0x%x", message, error_code);
+    }
+}
+
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
+{
+    ESP_LOGD(TAG7, "Event dispatched from event loop base=%s, event_id=%" PRIi32 "", base, event_id);
+    esp_mqtt_event_handle_t event = event_data;
+    esp_mqtt_client_handle_t client = event->client;
+    int msg_id;
+    switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_CONNECTED:
+            // ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+            // msg_id = esp_mqtt_client_publish(client, "teste", "data_3: 4.0 data_2:8.0", 0, 1, 0);
+            // ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
+
+            msg_id = esp_mqtt_client_subscribe(client, "VoutEnvia", 1);
+            ESP_LOGI(TAG7, "sent subscribe successful, msg_id=%d", msg_id);
+
+            msg_id = esp_mqtt_client_subscribe(client, "ReqDados", 1);
+            ESP_LOGI(TAG7, "sent subscribe successful, msg_id=%d", msg_id);
+
+            // msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
+            // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+
+            // msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
+            // ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
+            break;
+        case MQTT_EVENT_DISCONNECTED:
+            ESP_LOGI(TAG7, "MQTT_EVENT_DISCONNECTED");
+            break;
+
+        case MQTT_EVENT_SUBSCRIBED:
+            ESP_LOGI(TAG7, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+            msg_id = esp_mqtt_client_publish(client, "teste", "11", 0, 0, 0);
+            ESP_LOGI(TAG7, "sent publish successful, msg_id=%d", msg_id);
+            break;
+        case MQTT_EVENT_UNSUBSCRIBED:
+            ESP_LOGI(TAG7, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+            break;
+        case MQTT_EVENT_PUBLISHED:
+            ESP_LOGI(TAG7, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+            break;
+        case MQTT_EVENT_DATA:
+            {
+                filaRecebeP7 filaDados = {0,0};
+                // 1. Defina buffers com tamanho suficiente
+                char topic_str[12]; // O maximo que vou receber é tópicos com 9 caracteres, estou colocando um excesso por segurança
+                char data_str[6];   // Vou receber um float em formato de string no meu MQTT aparece com apenas uma casa decimal
+
+                // 2. Use snprintf para formatar e salvar na variável
+                snprintf(topic_str, sizeof(topic_str), "%.*s", event->topic_len, event->topic);
+                snprintf(data_str, sizeof(data_str), "%.*s", event->data_len, event->data);
+                ESP_LOGI(TAG7,"%s",topic_str);
+                ESP_LOGI(TAG7,"%s",data_str);
+
+                filaDados.requisaTensaoBool = 1;
+                if (strcmp(topic_str, "VoutEnvia") == 0) {
+                    filaDados.setPointDesejado = strtof(data_str, NULL);
+                    ESP_LOGI(TAG7,"Valor Float=%f",strtof(data_str, NULL));
+                    if (xQueueOverwrite(filaFromP7Queue, &filaDados) != pdPASS) { 
+                        ESP_LOGW(TAG, "Falha ao sobrescrever na fila");
+                    }
+                }
+                else if (strcmp(topic_str, "ReqDados") == 0) {
+                    msg_id = esp_mqtt_client_publish(client, "ReqDados", "0", 2, 1, 0); // Tamanho 2, QOS 1, RETAIN 0
+                    filaDados.setPointDesejado = -1;
+                    if (xQueueOverwrite(filaFromP7Queue, &filaDados) != pdPASS) { 
+                        ESP_LOGW(TAG, "Falha ao sobrescrever na fila");
+                    }
+                }
+                break;
+            } // Fim do bloco case
+        case MQTT_EVENT_ERROR:
+            ESP_LOGI(TAG7, "MQTT_EVENT_ERROR");
+            if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+                log_error_if_nonzero("reported from esp-tls", event->error_handle->esp_tls_last_esp_err);
+                log_error_if_nonzero("reported from tls stack", event->error_handle->esp_tls_stack_err);
+                log_error_if_nonzero("captured as transport's socket errno",  event->error_handle->esp_transport_sock_errno);
+                ESP_LOGI(TAG7, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
+            }
+            break;
+        default:
+            ESP_LOGI(TAG7, "Other event id:%d", event->event_id);
+            break;
+        }
+}
+
+static void mqtt_app_start(void)
+{
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .broker.address.uri = "mqtt://g3device:g3device@node02.myqtthub.com:1883",
+        .credentials.client_id =  "g3device",
+    };
+
+    client = esp_mqtt_client_init(&mqtt_cfg);
+    /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(client);
+    ESP_LOGI(TAG7,"INICIANDO MQTT");
+}
+
+static void pratica07(void* arg){
+    ESP_LOGI(TAG7, "[APP] Iniciando MQTT..");
+    ESP_LOGI(TAG7, "[APP] Memoria Livre: %" PRIu32 " bytes", esp_get_free_heap_size());
+
+    esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set("mqtt_client", ESP_LOG_VERBOSE);
+    esp_log_level_set("mqtt_example", ESP_LOG_VERBOSE);
+    esp_log_level_set("transport_base", ESP_LOG_VERBOSE);
+    esp_log_level_set("esp-tls", ESP_LOG_VERBOSE);
+    esp_log_level_set("transport", ESP_LOG_VERBOSE);
+    esp_log_level_set("outbox", ESP_LOG_VERBOSE);
+
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
+     * Read "Establishing Wi-Fi or Ethernet Connection" section in
+     * examples/protocols/README.md for more information about this function.
+     */
+    ESP_ERROR_CHECK(example_connect());
+
+    mqtt_app_start();
+
+    filaEnviaP7 filaDados = {0,0};
+    char buffer_envio[10]; // Buffer auxiliar para converter o número em texto
+
+    while(1){
+        if (xQueueReceive(filaToP7Queue, &filaDados, portMAX_DELAY)){
+            // 1. Envia a Tensão normalmente
+            snprintf(buffer_envio, sizeof(buffer_envio), "%2.1f", filaDados.tensaoAtual);
+            esp_mqtt_client_publish(client, "VoutAtual", buffer_envio, 0, 1, 0);
+
+            // 2. Converte o Duty de (0.0 - 1.0) para (0.0 - 100.0)
+            // Multiplicamos por 100.0 antes de formatar a string
+            snprintf(buffer_envio, sizeof(buffer_envio), "%2.1f", filaDados.dutyAtual * 100.0);
+            esp_mqtt_client_publish(client, "DutyAtual", buffer_envio, 0, 1, 0);
+        }
+    }
+}
+
 void app_main(void) {
     ESP_LOGI(TAG, "Iniciando Sistema Buck Converter...");
     desativar_watchdog_total();
@@ -175,32 +344,47 @@ void app_main(void) {
     float x_prev = 0.0f;
     float y_prev = 0.0f;
     // float setpoint = 9.0f-0.77f;
-    float setpoint = 10.0f;
-    int valor_bruto = 0;
+    float setpoint = 1.0f;
+    float x_n = 0;
     int tensao_mv = 0;
+    int valor_bruto = 0;
+    float tensaoLidaComGanho = 0;
 
     ESP_LOGI(TAG, "Loop de controle iniciado no app_main.");
     // Desativa o watchdog para a tarefa atual (main)
 
+    // Crie as filas PRIMEIRO
+    filaFromP7Queue = xQueueCreate(1, sizeof(filaRecebeP7));
+    filaToP7Queue = xQueueCreate(1, sizeof(filaEnviaP7));
+
+    // Depois crie a task
+    xTaskCreate(pratica07, "pratica07", 4096, NULL, 10, NULL);
+
+    filaRecebeP7 filaDados = {1,0};
+    filaEnviaP7 filaDados2 = {0,0};
+
     while (1) {
         // Espera o sinal do Timer (Interrupção)
-         if (xSemaphoreTake(semaphore_adc,  portMAX_DELAY)) {
-            
-            // A. Leitura do ADC (Raw -> Voltage)
-            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_5, &valor_bruto));
-        
-            float x_n = 0.0f;
+        if(xQueueReceive(filaFromP7Queue, &filaDados, 0)){
+            ESP_LOGI(TAG,"RECEBEU DA FILA");
+            ESP_LOGI(TAG,"%f",filaDados.setPointDesejado);
+            ESP_LOGI(TAG, "%d", (int)filaDados.requisaTensaoBool);
+        }
+
+        if (xSemaphoreTake(semaphore_adc,  portMAX_DELAY)) {
+
+            if(filaDados.setPointDesejado>0 && filaDados.requisaTensaoBool){
+                setpoint = filaDados.setPointDesejado;
+                filaDados.setPointDesejado = -1; // Bloqueia re-processamento
+            }
+
             if (do_calibration) {
                 // ESP_LOGI(TAG,"ENTROU DO CALIBRATION");
+                ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_5, &valor_bruto));
                 adc_cali_raw_to_voltage(adc1_cali_handle, valor_bruto, &tensao_mv);
-                x_n = setpoint - ((float)tensao_mv / 1000.0f) * 4.921568627;
-                // ESP_LOGI(TAG,"%d",tensao_mv);
+                tensaoLidaComGanho = ((float)tensao_mv / 1000.0f) * 4.921568627;
+                x_n = setpoint - tensaoLidaComGanho;
             } 
-
-            // // ESP_LOGI(TAG,"%d",tensao_mv);
-            // // else {
-            //     x_n = setpoint - ((float)valor_bruto * 3.3f / 4095.0f) * 4.921568627;
-            // // }
 
             // // B. Equação de Diferenças (Controlador)
             float duty_float = (0.001241f * x_n) + (0.001241f * x_prev) + y_prev;
@@ -221,6 +405,15 @@ void app_main(void) {
             // E. Histórico
             x_prev = x_n;
             y_prev = duty_float;
+
+            if(filaDados.requisaTensaoBool){ 
+                filaDados2.dutyAtual = duty_float;
+                filaDados2.tensaoAtual = tensaoLidaComGanho;
+                if (xQueueOverwrite(filaToP7Queue, &filaDados2) != pdPASS) { 
+                    ESP_LOGW(TAG, "Falha ao sobrescrever na fila");
+                }
+                filaDados.requisaTensaoBool = 0;
+            }
         }
         
         // O Watchdog não vai disparar aqui porque a cada ciclo de 50kHz, 
