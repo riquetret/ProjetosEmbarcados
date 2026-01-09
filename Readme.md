@@ -27,9 +27,9 @@ Apesar de ser um controlador puramente integrativo, foi o melhor controlador obt
 
 Usando a aproximação de tustin para discretizar, obtemos a seguinte equação diferenças que foi aplicado no código:<br>
 $$y[n] = 0,001241 \cdot x[n] + 0,001241 \cdot x[n-1] + y[n-1]$$
-Nesse caso x[n] é o nosso erro obtido (setpoint-vout) e y[n] o duty cycle a ser alterado, variando a saída que é dada por:<br>
+<br>Nesse caso x[n] é o nosso erro obtido (setpoint-vout) e y[n] o duty cycle a ser alterado, variando a saída que é dada por:<br>
 $$V_{out} = V_{in} \cdot D$$
-Isso para região Linear. Um outro fato é que a tensão está sendo lida por um divisor de tensão, razão pela qual é preciso no código multiplicar por 4,92 a tensão de modo a ter uma realimentação unitária. Ademais o circuito funciona usando um capacitor de bootstrap acoplado ao IR2113.
+<br>Isso para região Linear. Um outro fato é que a tensão está sendo lida por um divisor de tensão, razão pela qual é preciso no código multiplicar por 4,92 a tensão de modo a ter uma realimentação unitária. Ademais o circuito funciona usando um capacitor de bootstrap acoplado ao IR2113.
 
 
 ---
